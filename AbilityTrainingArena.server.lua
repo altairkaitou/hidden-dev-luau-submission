@@ -877,7 +877,7 @@ local function setupPlayer(player: Player)
 		task.wait(0.25)
 		local rootPart = character:FindFirstChild("HumanoidRootPart")
 		if rootPart and rootPart:IsA("BasePart") then
-			rootPart.CFrame = CFrame.new(0, 4, 31) * CFrame.Angles(0, math.rad(180), 0)
+			rootPart.CFrame = CFrame.lookAt(Vector3.new(0, 4, 31), Vector3.new(0, 4, -10))
 		end
 		createHud(player)
 		giveTool(player)
