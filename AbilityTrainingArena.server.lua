@@ -5,9 +5,9 @@
 
     This is a single-script Roblox Luau demonstration for the HiddenDevs
     Luau Scripter role. It is intentionally standalone: paste this Script into
-    ServerScriptService and it will build a small arena, clone the placed
-    Skeleton_Warrior target mesh, give each player a combat tool, and run a
-    server-authoritative ground wave.
+    ServerScriptService and it will place five Skeleton_Warrior targets in the
+    existing level, give each player a combat tool, and run a server-authoritative
+    ground wave.
 
     The design borrows the shape of my ENTRO ARPG combat work without copying
     its private modules: cast validation, cooldown gates, CFrame directional
@@ -26,7 +26,7 @@ local RunService = game:GetService("RunService")
 -- easy to audit without hunting through the implementation for magic numbers.
 local CONFIG = {
 	RootFolderName = "AbilityTrainingArena_Demo",
-	ArenaRadius = 72,
+	CombatRadius = 72,
 	ToolName = "Earth Shatter",
 	CastCooldown = 1.75,
 	CastLockDuration = 0.28,
@@ -66,7 +66,6 @@ local CONFIG = {
 		LightningResist = 0,
 	},
 	Colors = {
-		Ground = Color3.fromRGB(41, 35, 30),
 		Trim = Color3.fromRGB(126, 94, 62),
 		Accent = Color3.fromRGB(255, 142, 52),
 		Crit = Color3.fromRGB(255, 221, 92),
@@ -94,7 +93,6 @@ type CooldownData = { [number]: { [string]: number } }
 
 local rng = Random.new()
 local rootFolder: Folder
-local arenaFolder: Folder
 local dummyFolder: Folder
 local effectsFolder: Folder
 local hudByPlayer: { [Player]: HudRefs } = {}
@@ -102,7 +100,7 @@ local playerToolConnections: { [Player]: { RBXScriptConnection } } = {}
 local activeCastTokens: { [number]: { cancelled: boolean } } = {}
 
 -- The live demo does not trust arbitrary character state: every cast re-checks
--- finite vectors, a living Humanoid, arena bounds, and cooldown ownership.
+-- finite vectors, a living Humanoid, combat-range bounds, and cooldown ownership.
 local function isFiniteNumber(value: number): boolean
 	return value == value and value ~= math.huge and value ~= -math.huge
 end
@@ -131,21 +129,6 @@ local function makeFolder(parent: Instance, name: string): Folder
 	folder.Name = name
 	folder.Parent = parent
 	return folder
-end
-
-local function makePart(name: string, size: Vector3, cframe: CFrame, color: Color3, material: Enum.Material, parent: Instance): Part
-	local part = Instance.new("Part")
-	part.Name = name
-	part.Size = size
-	part.CFrame = cframe
-	part.Color = color
-	part.Material = material
-	part.Anchored = true
-	part.CanCollide = true
-	part.TopSurface = Enum.SurfaceType.Smooth
-	part.BottomSurface = Enum.SurfaceType.Smooth
-	part.Parent = parent
-	return part
 end
 
 -- Reused for simple multi-part props such as the player's ability tool.
@@ -192,18 +175,38 @@ local function rotateAroundY(vector: Vector3, radians: number): Vector3
 	return CFrame.Angles(0, radians, 0):VectorToWorldSpace(vector)
 end
 
-local function getArenaCenter(): Vector3
-	local center = rootFolder:GetAttribute("ArenaCenter")
+local function getCombatCenter(): Vector3
+	local center = rootFolder:GetAttribute("CombatCenter")
 	if typeof(center) == "Vector3" then
 		return center
 	end
 	return Vector3.new(0, 2, 0)
 end
 
-local function getArenaDistance(position: Vector3): number
-	local center = getArenaCenter()
+local function getCombatDistance(position: Vector3): number
+	local center = getCombatCenter()
 	local delta = Vector3.new(position.X - center.X, 0, position.Z - center.Z)
 	return delta.Magnitude
+end
+
+local function getCombatForward(): Vector3
+	local forward = rootFolder:GetAttribute("CombatForward")
+	if typeof(forward) == "Vector3" then
+		local flatForward = Vector3.new(forward.X, 0, forward.Z)
+		if flatForward.Magnitude > 0.05 then
+			return flatForward.Unit
+		end
+	end
+	return Vector3.new(0, 0, -1)
+end
+
+local function getPlayerStartCFrame(): CFrame
+	local center = getCombatCenter()
+	local groundY = rootFolder:GetAttribute("CombatGroundY")
+	local spawnY = if typeof(groundY) == "number" then groundY + 3.5 else 4
+	local forward = getCombatForward()
+	local spawnPosition = Vector3.new(center.X, spawnY, center.Z) - forward * 34
+	return CFrame.lookAt(spawnPosition, spawnPosition + forward)
 end
 
 local function createBillboard(parent: BasePart, title: string, size: UDim2, yOffset: number): TextLabel
@@ -507,8 +510,8 @@ function Ability:Validate(player: Player): (boolean, string, Model?, Humanoid?, 
 		return false, "Invalid character position.", character, humanoid, rootPart
 	end
 
-	if getArenaDistance(rootPart.Position) > CONFIG.ArenaRadius then
-		return false, "Move into the arena before casting.", character, humanoid, rootPart
+	if getCombatDistance(rootPart.Position) > CONFIG.CombatRadius then
+		return false, "Move closer to the targets before casting.", character, humanoid, rootPart
 	end
 
 	local canUse, remaining = self.Cooldowns:CanUse(player, self.Name)
@@ -822,45 +825,36 @@ local function giveTool(player: Player)
 	}
 end
 
-local function buildArena()
-	-- The script rebuilds only its own demo folder, leaving the rest of the copied
-	-- place untouched while still providing a complete working demonstration.
+local function buildCombatTargets()
+	-- Only runtime-owned folders are rebuilt. The copied level remains untouched:
+	-- there is no generated floor, wall, spawn pad, or instruction sign.
 	clearChildrenByName(Workspace, CONFIG.RootFolderName)
 	rootFolder = makeFolder(Workspace, CONFIG.RootFolderName)
-	rootFolder:SetAttribute("ArenaCenter", Vector3.new(0, 3, 0))
-	arenaFolder = makeFolder(rootFolder, "Arena")
 	dummyFolder = makeFolder(rootFolder, "Dummies")
 	effectsFolder = makeFolder(rootFolder, "TransientEffects")
 
-	makePart("ArenaFloor", Vector3.new(120, 1, 120), CFrame.new(0, 0, 0), CONFIG.Colors.Ground, Enum.Material.Slate, arenaFolder)
-	makePart("CastPad", Vector3.new(14, 0.28, 14), CFrame.new(0, 0.68, 22), CONFIG.Colors.Trim, Enum.Material.WoodPlanks, arenaFolder)
-	makePart("BackWall", Vector3.new(124, 10, 2), CFrame.new(0, 5, -61), CONFIG.Colors.Trim, Enum.Material.Rock, arenaFolder)
-	makePart("LeftWall", Vector3.new(2, 10, 124), CFrame.new(-61, 5, 0), CONFIG.Colors.Trim, Enum.Material.Rock, arenaFolder)
-	makePart("RightWall", Vector3.new(2, 10, 124), CFrame.new(61, 5, 0), CONFIG.Colors.Trim, Enum.Material.Rock, arenaFolder)
-
-	local spawn = Instance.new("SpawnLocation")
-	spawn.Name = "SubmissionSpawn"
-	spawn.Size = Vector3.new(8, 1, 8)
-	spawn.CFrame = CFrame.new(0, 1.1, 31)
-	spawn.Color = Color3.fromRGB(65, 95, 82)
-	spawn.Material = Enum.Material.Neon
-	spawn.Anchored = true
-	spawn.Neutral = true
-	spawn.Duration = 0
-	spawn.Parent = arenaFolder
-
-	local signPart = makePart("InstructionSign", Vector3.new(18, 8, 0.6), CFrame.new(0, 6, 41), Color3.fromRGB(24, 22, 20), Enum.Material.Wood, arenaFolder)
-	createBillboard(signPart, "Face dummies and click Earth Shatter", UDim2.fromOffset(360, 42), 5.8)
-
 	local skeletonTemplate = getSkeletonTemplate()
+	local templateCFrame = skeletonTemplate.CFrame
 	local horizontalSpacing = math.max(12, skeletonTemplate.Size.X + 3)
-	local spawnHeight = 0.5 + skeletonTemplate.Size.Y * 0.5
+	rootFolder:SetAttribute("CombatCenter", templateCFrame.Position)
+	rootFolder:SetAttribute("CombatForward", templateCFrame.LookVector)
+	rootFolder:SetAttribute("CombatGroundY", templateCFrame.Position.Y - skeletonTemplate.Size.Y * 0.5)
 
 	for i = 1, CONFIG.DummyCount do
 		local spread = (i - (CONFIG.DummyCount + 1) / 2) * horizontalSpacing
 		local depth = -8 - math.abs(i - 3) * 3
-		local spawnCFrame = CFrame.new(spread, spawnHeight, depth) * CFrame.Angles(0, math.rad(180), 0)
+		local spawnCFrame = templateCFrame * CFrame.new(spread, 0, depth) * CFrame.Angles(0, math.rad(180), 0)
 		TargetDummy.new(i, spawnCFrame, skeletonTemplate)
+	end
+
+	-- The Workspace mesh is a source template, not an extra sixth opponent.
+	skeletonTemplate:Destroy()
+end
+
+local function positionCharacterAtTargets(character: Model)
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if rootPart and rootPart:IsA("BasePart") then
+		rootPart.CFrame = getPlayerStartCFrame()
 	end
 end
 
@@ -869,13 +863,13 @@ local function setupPlayer(player: Player)
 	-- recreated by Roblox; old tool connections are cleaned before a new tool is given.
 	createHud(player)
 	giveTool(player)
+	if player.Character then
+		positionCharacterAtTargets(player.Character)
+	end
 
 	player.CharacterAdded:Connect(function(character)
 		task.wait(0.25)
-		local rootPart = character:FindFirstChild("HumanoidRootPart")
-		if rootPart and rootPart:IsA("BasePart") then
-			rootPart.CFrame = CFrame.lookAt(Vector3.new(0, 4, 31), Vector3.new(0, 4, -10))
-		end
+		positionCharacterAtTargets(character)
 		createHud(player)
 		giveTool(player)
 	end)
@@ -904,7 +898,7 @@ local function printStartupSummary()
 	warn("[AbilityTrainingArena] The demo is intentionally one Script; all modules from the copied project were removed.")
 end
 
-buildArena()
+buildCombatTargets()
 
 Players.PlayerAdded:Connect(setupPlayer)
 Players.PlayerRemoving:Connect(cleanupPlayer)
