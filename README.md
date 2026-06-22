@@ -21,7 +21,7 @@ Ability Training Arena:
 - OverlapParams hit detection with per-cast hit de-duplication
 - Physics knockback
 - ARPG-style damage calculation with crits, falloff, and mitigation
-- Dummy health, respawn, damage popups, and hit counters
+- Skeleton Warrior mesh targets with health, respawn, damage popups, and hit counters
 - Simple player-facing status UI
 - Cleanup for temporary VFX, physics debris, and event connections
 

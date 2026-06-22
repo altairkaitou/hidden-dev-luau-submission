@@ -5,8 +5,9 @@
 
     This is a single-script Roblox Luau demonstration for the HiddenDevs
     Luau Scripter role. It is intentionally standalone: paste this Script into
-    ServerScriptService and it will build a small arena, spawn training dummies,
-    give each player a combat tool, and run a server-authoritative ground wave.
+    ServerScriptService and it will build a small arena, clone the placed
+    Skeleton_Warrior target mesh, give each player a combat tool, and run a
+    server-authoritative ground wave.
 
     The design borrows the shape of my ENTRO ARPG combat work without copying
     its private modules: cast validation, cooldown gates, CFrame directional
@@ -33,6 +34,7 @@ local CONFIG = {
 	DummyHealth = 420,
 	DummyCount = 5,
 	DummyTag = "HD_TargetDummy",
+	SkeletonTemplateName = "Skeleton_Warrior",
 	Wave = {
 		LaneCount = 3,
 		LaneSpreadDegrees = 28,
@@ -68,7 +70,6 @@ local CONFIG = {
 		Trim = Color3.fromRGB(126, 94, 62),
 		Accent = Color3.fromRGB(255, 142, 52),
 		Crit = Color3.fromRGB(255, 221, 92),
-		Dummy = Color3.fromRGB(158, 112, 80),
 		DummyHit = Color3.fromRGB(255, 86, 62),
 		UIBack = Color3.fromRGB(16, 15, 14),
 		UIText = Color3.fromRGB(238, 230, 214),
@@ -145,13 +146,6 @@ local function makePart(name: string, size: Vector3, cframe: CFrame, color: Colo
 	part.BottomSurface = Enum.SurfaceType.Smooth
 	part.Parent = parent
 	return part
-end
-
-local function weld(part0: BasePart, part1: BasePart)
-	local weldConstraint = Instance.new("WeldConstraint")
-	weldConstraint.Part0 = part0
-	weldConstraint.Part1 = part1
-	weldConstraint.Parent = part0
 end
 
 local function getCharacterParts(player: Player): (Model?, Humanoid?, BasePart?)
@@ -337,43 +331,33 @@ type TargetDummyObject = typeof(setmetatable({} :: {
 
 local dummiesByModel: { [Model]: TargetDummyObject } = {}
 
-function TargetDummy.new(index: number, spawnCFrame: CFrame): TargetDummyObject
+-- The level owns the source mesh at Workspace.Skeleton_Warrior. Each target gets
+-- a clone so the placed source asset is never moved, reparented, or modified by
+-- arena combat. A MeshPart can serve as the root of this simple stationary rig.
+local function getSkeletonTemplate(): MeshPart
+	local template = Workspace:FindFirstChild(CONFIG.SkeletonTemplateName)
+	if not template then
+		error(`Expected Workspace.{CONFIG.SkeletonTemplateName} as the target template`)
+	end
+	if not template:IsA("MeshPart") then
+		error(`Workspace.{CONFIG.SkeletonTemplateName} must be a MeshPart, got {template.ClassName}`)
+	end
+	return template
+end
+
+function TargetDummy.new(index: number, spawnCFrame: CFrame, skeletonTemplate: MeshPart): TargetDummyObject
 	local model = Instance.new("Model")
-	model.Name = `TrainingDummy_{index}`
+	model.Name = `SkeletonWarrior_{index}`
 	model.Parent = dummyFolder
 
-	local root = Instance.new("Part")
+	local root = skeletonTemplate:Clone() :: MeshPart
 	root.Name = "HumanoidRootPart"
-	root.Size = Vector3.new(2.2, 3.4, 1.35)
 	root.CFrame = spawnCFrame
-	root.Color = CONFIG.Colors.Dummy
-	root.Material = Enum.Material.SmoothPlastic
+	root.Anchored = false
 	root.CanCollide = true
+	root.CanQuery = true
 	root.CustomPhysicalProperties = PhysicalProperties.new(1.8, 0.75, 0.08, 1, 1)
 	root.Parent = model
-
-	local torso = Instance.new("Part")
-	torso.Name = "Torso"
-	torso.Size = Vector3.new(2.6, 3.0, 1.15)
-	torso.CFrame = root.CFrame
-	torso.Color = CONFIG.Colors.Dummy
-	torso.Material = Enum.Material.Wood
-	torso.CanCollide = false
-	torso.Massless = true
-	torso.Parent = model
-	weld(root, torso)
-
-	local head = Instance.new("Part")
-	head.Name = "Head"
-	head.Shape = Enum.PartType.Ball
-	head.Size = Vector3.new(1.45, 1.45, 1.45)
-	head.CFrame = root.CFrame * CFrame.new(0, 2.25, 0)
-	head.Color = Color3.fromRGB(195, 143, 92)
-	head.Material = Enum.Material.SmoothPlastic
-	head.CanCollide = false
-	head.Massless = true
-	head.Parent = model
-	weld(root, head)
 
 	local humanoid = Instance.new("Humanoid")
 	humanoid.Name = "Humanoid"
@@ -383,13 +367,14 @@ function TargetDummy.new(index: number, spawnCFrame: CFrame): TargetDummyObject
 	humanoid.Parent = model
 
 	model.PrimaryPart = root
-	model:SetAttribute("TrainingDummy", true)
+	model:SetAttribute("ArenaTarget", true)
 	CollectionService:AddTag(model, CONFIG.DummyTag)
 	pcall(function()
 		root:SetNetworkOwner(nil)
 	end)
 
-	local label = createBillboard(root, `Dummy {index} | {CONFIG.DummyHealth} HP`, UDim2.fromOffset(190, 34), 4.2)
+	local labelOffset = root.Size.Y * 0.5 + 1.2
+	local label = createBillboard(root, `Skeleton {index} | {CONFIG.DummyHealth} HP`, UDim2.fromOffset(220, 34), labelOffset)
 	local self = setmetatable({
 		Model = model,
 		Root = root,
@@ -859,11 +844,15 @@ local function buildArena()
 	local signPart = makePart("InstructionSign", Vector3.new(18, 8, 0.6), CFrame.new(0, 6, 41), Color3.fromRGB(24, 22, 20), Enum.Material.Wood, arenaFolder)
 	createBillboard(signPart, "Face dummies and click Earth Shatter", UDim2.fromOffset(360, 42), 5.8)
 
+	local skeletonTemplate = getSkeletonTemplate()
+	local horizontalSpacing = math.max(12, skeletonTemplate.Size.X + 3)
+	local spawnHeight = 0.5 + skeletonTemplate.Size.Y * 0.5
+
 	for i = 1, CONFIG.DummyCount do
-		local spread = (i - (CONFIG.DummyCount + 1) / 2) * 9
+		local spread = (i - (CONFIG.DummyCount + 1) / 2) * horizontalSpacing
 		local depth = -8 - math.abs(i - 3) * 3
-		local spawnCFrame = CFrame.new(spread, 3.1, depth) * CFrame.Angles(0, math.rad(180), 0)
-		TargetDummy.new(i, spawnCFrame)
+		local spawnCFrame = CFrame.new(spread, spawnHeight, depth) * CFrame.Angles(0, math.rad(180), 0)
+		TargetDummy.new(i, spawnCFrame, skeletonTemplate)
 	end
 end
 
