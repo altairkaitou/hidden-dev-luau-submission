@@ -148,6 +148,14 @@ local function makePart(name: string, size: Vector3, cframe: CFrame, color: Colo
 	return part
 end
 
+-- Reused for simple multi-part props such as the player's ability tool.
+local function weld(part0: BasePart, part1: BasePart)
+	local weldConstraint = Instance.new("WeldConstraint")
+	weldConstraint.Part0 = part0
+	weldConstraint.Part1 = part1
+	weldConstraint.Parent = part0
+end
+
 local function getCharacterParts(player: Player): (Model?, Humanoid?, BasePart?)
 	local character = player.Character
 	if not character then
