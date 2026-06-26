@@ -62,7 +62,6 @@ local CONFIG = {
 		Accent = Color3.fromRGB(255, 142, 52),
 		Crit = Color3.fromRGB(255, 221, 92),
 		DummyHit = Color3.fromRGB(255, 86, 62),
-		UIBack = Color3.fromRGB(16, 15, 14),
 		UIText = Color3.fromRGB(238, 230, 214),
 	},
 }
@@ -75,19 +74,12 @@ type DamageResult = {
 	raw: number,
 	mitigation: number,
 }
-type HudRefs = {
-	Root: ScreenGui,
-	Status: TextLabel,
-	Cooldown: TextLabel,
-	Damage: TextLabel,
-}
 type CooldownData = { [number]: { [string]: number } }
 
 local rng = Random.new()
 local rootFolder: Folder
 local dummyFolder: Folder
 local effectsFolder: Folder
-local hudByPlayer: { [Player]: HudRefs } = {}
 local playerToolConnections: { [Player]: { RBXScriptConnection } } = {}
 local activeCastTokens: { [number]: { cancelled: boolean } } = {}
 
@@ -455,10 +447,8 @@ end
 local Ability = {}
 Ability.__index = Ability
 
-local setHud: (Player, "Status" | "Cooldown" | "Damage", string, Color3) -> ()
-
 -- Ability coordinates validation, cooldowns, CFrame wave math, overlap queries,
--- damage application, VFX, and HUD feedback as one cohesive gameplay system.
+-- damage application, and VFX as one cohesive gameplay system.
 type AbilityObject = typeof(setmetatable({} :: {
 	Name: string,
 	Cooldowns: any,
@@ -512,20 +502,6 @@ function Ability:Validate(player: Player): (boolean, string, Model?, Humanoid?, 
 	end
 
 	return true, "Ready.", character, humanoid, rootPart
-end
-
-function Ability:StartCooldownHud(player: Player)
-	task.spawn(function()
-		while player.Parent do
-			local _, remaining = self.Cooldowns:CanUse(player, self.Name)
-			if remaining <= 0 then
-				setHud(player, "Cooldown", "Cooldown ready", Color3.fromRGB(116, 230, 150))
-				break
-			end
-			setHud(player, "Cooldown", `Cooldown {string.format("%.1f", remaining)}s`, CONFIG.Colors.Crit)
-			task.wait(0.1)
-		end
-	end)
 end
 
 function Ability:ApplyCastLock(humanoid: Humanoid)
@@ -623,7 +599,6 @@ function Ability:ResolveHits(player: Player, stepCFrame: CFrame, stepIndex: numb
 		local damageResult = calculateDamage(CONFIG.Wave.BaseDamage, CONFIG.PlayerStats, CONFIG.DummyStats, stepIndex)
 		if dummy:TakeHit(damageResult, stepCFrame.Position, forward) then
 			self:AddDamage(player, damageResult.amount)
-			setHud(player, "Damage", `Total damage {rounded(self:GetTotalDamage(player))} | Hits {self:GetHitCount(player)}`, CONFIG.Colors.UIText)
 		end
 	end
 end
@@ -631,14 +606,12 @@ end
 function Ability:Cast(player: Player)
 	local isValid, reason, _character, humanoid, rootPart = self:Validate(player)
 	if not isValid or not humanoid or not rootPart then
-		setHud(player, "Status", reason, Color3.fromRGB(255, 120, 90))
+		warn(`[AbilityTrainingArena] Cast rejected for {player.Name}: {reason}`)
 		return
 	end
 
 	self.Cooldowns:Stamp(player, self.Name)
-	self:StartCooldownHud(player)
 	self:ApplyCastLock(humanoid)
-	setHud(player, "Status", "Earth Shatter cast accepted by server.", Color3.fromRGB(116, 230, 150))
 
 	local userId = player.UserId
 	local previous = activeCastTokens[userId]
@@ -680,79 +653,6 @@ end
 
 local cooldowns = CooldownTracker.new(CONFIG.CastCooldown)
 local earthShatter = Ability.new("earth_shatter", cooldowns)
-
-setHud = function(player: Player, key: "Status" | "Cooldown" | "Damage", text: string, color: Color3)
-	local hud = hudByPlayer[player]
-	if not hud then
-		return
-	end
-
-	local label = hud[key]
-	label.Text = text
-	label.TextColor3 = color
-end
-
-local function createHud(player: Player)
-	local playerGui = player:FindFirstChildOfClass("PlayerGui") or player:WaitForChild("PlayerGui", 10)
-	if not playerGui then
-		return
-	end
-
-	clearChildrenByName(playerGui, "AbilityTrainingArenaHud")
-
-	local screenGui = Instance.new("ScreenGui")
-	screenGui.Name = "AbilityTrainingArenaHud"
-	screenGui.ResetOnSpawn = false
-	screenGui.Parent = playerGui
-
-	local frame = Instance.new("Frame")
-	frame.Name = "Panel"
-	frame.AnchorPoint = Vector2.new(0, 1)
-	frame.Position = UDim2.new(0, 18, 1, -18)
-	frame.Size = UDim2.fromOffset(360, 126)
-	frame.BackgroundColor3 = CONFIG.Colors.UIBack
-	frame.BackgroundTransparency = 0.08
-	frame.BorderSizePixel = 0
-	frame.Parent = screenGui
-
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 8)
-	corner.Parent = frame
-
-	local stroke = Instance.new("UIStroke")
-	stroke.Color = CONFIG.Colors.Trim
-	stroke.Thickness = 1
-	stroke.Transparency = 0.25
-	stroke.Parent = frame
-
-	local function line(name: string, y: number, text: string, size: number): TextLabel
-		local label = Instance.new("TextLabel")
-		label.Name = name
-		label.BackgroundTransparency = 1
-		label.Position = UDim2.fromOffset(14, y)
-		label.Size = UDim2.new(1, -28, 0, size)
-		label.Font = Enum.Font.GothamMedium
-		label.TextXAlignment = Enum.TextXAlignment.Left
-		label.TextSize = size
-		label.TextColor3 = CONFIG.Colors.UIText
-		label.Text = text
-		label.Parent = frame
-		return label
-	end
-
-	local title = line("Title", 10, "Ability Training Arena", 18)
-	title.Font = Enum.Font.GothamBold
-	local status = line("Status", 38, "Equip Earth Shatter, face the dummies, click to cast.", 14)
-	local cooldown = line("Cooldown", 66, "Cooldown ready", 14)
-	local damage = line("Damage", 92, "Total damage 0 | Hits 0", 14)
-
-	hudByPlayer[player] = {
-		Root = screenGui,
-		Status = status,
-		Cooldown = cooldown,
-		Damage = damage,
-	}
-end
 
 local function makeTool(): Tool
 	local tool = Instance.new("Tool")
@@ -819,7 +719,7 @@ end
 
 local function buildCombatTargets()
 	-- Only runtime-owned folders are rebuilt. The copied level remains untouched:
-	-- there is no generated floor, wall, spawn pad, or instruction sign.
+	-- there is no extra floor, wall, spawn pad, or instruction sign.
 	clearChildrenByName(Workspace, CONFIG.RootFolderName)
 	rootFolder = makeFolder(Workspace, CONFIG.RootFolderName)
 	dummyFolder = makeFolder(rootFolder, "Dummies")
@@ -851,9 +751,8 @@ local function positionCharacterAtTargets(character: Model)
 end
 
 local function setupPlayer(player: Player)
-	-- Player setup is repeated on respawn because PlayerGui and Backpack are
-	-- recreated by Roblox; old tool connections are cleaned before a new tool is given.
-	createHud(player)
+	-- Player setup is repeated on respawn because Backpack is recreated by Roblox;
+	-- old tool connections are cleaned before a new tool is given.
 	giveTool(player)
 	if player.Character then
 		positionCharacterAtTargets(player.Character)
@@ -862,14 +761,12 @@ local function setupPlayer(player: Player)
 	player.CharacterAdded:Connect(function(character)
 		task.wait(0.25)
 		positionCharacterAtTargets(character)
-		createHud(player)
 		giveTool(player)
 	end)
 end
 
 local function cleanupPlayer(player: Player)
 	disconnectToolConnections(player)
-	hudByPlayer[player] = nil
 	cooldowns:Clear(player)
 	local token = activeCastTokens[player.UserId]
 	if token then
