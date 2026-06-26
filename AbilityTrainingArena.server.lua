@@ -4,15 +4,7 @@
     Ability Training Arena
 
     This is a single-script Roblox Luau demonstration for the HiddenDevs
-    Luau Scripter role. It is intentionally standalone: paste this Script into
-    ServerScriptService and it will place five Skeleton_Warrior targets in the
-    existing level, give each player a combat tool, and run a server-authoritative
-    ground wave.
-
-    The design borrows the shape of my ENTRO ARPG combat work without copying
-    its private modules: cast validation, cooldown gates, CFrame directional
-    math, overlap hit detection, ARPG-style damage calculation, physics feedback,
-    transient VFX cleanup, and readable class-like tables through metatables.
+    Luau Scripter role. My demo is using a skill to damage the skeleton mob.
 ]]
 
 local Players = game:GetService("Players")
